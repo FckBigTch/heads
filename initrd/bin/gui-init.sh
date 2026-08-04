@@ -628,8 +628,8 @@ show_main_menu() {
 
 show_options_menu() {
 	TRACE_FUNC
-	whiptail_type $BG_COLOR_MAIN_MENU --title "$CONFIG_BRAND_NAME Options" \
-		--menu "" 0 80 10 \
+	
+	local menu_options=(
 		'b' ' Boot Options -->' \
 		't' ' TPM/TOTP/HOTP Options -->' \
 		'i' ' Investigate integrity discrepancies -->' \
@@ -637,6 +637,13 @@ show_options_menu() {
 		'u' ' Update checksums and sign all files in /boot' \
 		'c' ' Change configuration settings -->' \
 		'f' ' Flash/Update the BIOS -->' \
+	)
+
+	if [ "$CONFIG_NVMUTIL" = "y" ] && [ "$CONFIG_IFDTOOL" = "y" ]; then
+		menu_options+=('m' ' Ethernet MAC address randomization -->')
+	fi
+
+	menu_options+=(
 		'g' ' GPG Options -->' \
 		'F' ' OEM Factory Reset / Re-Ownership -->' \
 		'C' ' Reencrypt LUKS container -->' \
@@ -644,6 +651,11 @@ show_options_menu() {
 		'R' ' Check/Update file hashes on root disk -->' \
 		'x' ' Exit to recovery shell' \
 		'r' ' <-- Return to main menu' \
+	)
+
+	whiptail_type $BG_COLOR_MAIN_MENU --title "$CONFIG_BRAND_NAME Options" \
+		--menu "" 0 80 10 \
+		"${menu_options[@]}" \
 		2>/tmp/whiptail || recovery "GUI menu failed"
 
 	option=$(cat /tmp/whiptail)
@@ -668,6 +680,9 @@ show_options_menu() {
 		;;
 	f)
 		flash-gui.sh
+		;;
+	m)
+		mac_randomization_options_menu
 		;;
 	g)
 		gpg-gui.sh
@@ -903,6 +918,128 @@ force_unsafe_boot() {
 		--yesno "WARNING: You have chosen to skip all tamper checks and boot anyway.\n\nThis is an unsafe option!\n\nDo you want to proceed?" 0 80); then
 		mount_boot && kexec-select-boot.sh -m -b /boot -c "grub.cfg" -g -f
 	fi
+}
+
+clean_up_mac(){
+	# Don't leave temporary files lying around
+	if [ "$pwd" != "/tmp" ]; then
+		cd /tmp | return 1
+	fi
+
+	rm -f backup.* flashregion_*.bin
+}
+
+mac_randomization_options_menu() {
+	TRACE_FUNC
+	whiptail_type $BG_COLOR_MAIN_MENU --title "Ethernet MAC randomization" \
+		--menu "Select An Option" 0 80 10 \
+		'r' 'Generate a fully randomized ethernet MAC address' \
+		'i' 'Use a intel based universal pattern (OUI) to generate a random ethernet MAC address' \
+		's' 'Show the current ethernet MAC address' \
+		'm' ' <-- Return to main menu' \
+		2>/tmp/whiptail || recovery "GUI menu failed"
+
+	option=$(cat /tmp/whiptail)
+	case "$option" in
+	r)
+		change_mac "random"
+		;;
+	i)
+		change_mac "intel"
+		;;
+	s)
+		show_mac
+		clean_up_mac
+		;;
+	m) ;;
+
+	esac
+}
+
+# Show current MAC address
+show_mac(){
+	TRACE_FUNC
+	# Backup rom
+	flashprog -p internal -r /tmp/backup.rom
+	# test if file is > 0 byte
+	if [ ! -s /tmp/backup.rom ]; then
+		whiptail_error --title 'ERROR' --msgbox "Unable to read BIOS" 0 80
+		recovery
+	fi
+
+	cd /tmp
+	# Extract GBE from ifdtool
+	ifdtool -x backup.rom
+	if [ ! -s flashregion_3_gbe.bin ]; then
+		whiptail_error --title 'ERROR' --msgbox "Unable to extract gbe region" 0 80
+		recovery
+	fi
+
+	# Show just the current MAC, cut the rest
+	DUMP_OUTPUT=$(nvm flashregion_3_gbe.bin dump)
+	CURRENT_MAC=$(printf "%s\n" "$DUMP_OUTPUT" | sed -n '2p')
+	    whiptail_type $BG_COLOR_MAIN_MENU --title "Show current MAC address" --msgbox "Current MAC address: $CURRENT_MAC" 0 80
+}
+
+change_mac() {
+	TRACE_FUNC
+	local mac_type="$1"
+
+	show_mac
+
+	# Change MAC address randomly
+	# "nvmutil cannot specify multicast addresses"
+	# "nvmutil cannot specify 00:00:00:00:00:00"
+	# "randomly generated addresses are always unicast and local"
+	# See https://libreboot.org/docs/install/nvmutil.html
+
+	# Change MAC address randomly with intel OUI
+	# MAC Prefix: 00:1F:3B
+	# MAC Range: 00:1F:3B:00:00:00 - 00:1F:3B:FF:FF:FF
+	# See https://uic.io/en/mac/address/001f3b/
+	# There are a lot of prefixes from intel, this one is randomly picked
+
+	case "$mac_type" in
+		"random")
+			MAC_PATTERN="??:??:??:??:??:??"
+			;;
+		"intel")
+			MAC_PATTERN="00:1f:3b:??:??:??"
+			;;
+		*)
+			return 0
+			;;
+	esac
+
+	# Set mac to users choice
+	nvm flashregion_3_gbe.bin setmac "$MAC_PATTERN"
+
+	# Show MAC address to be flashed
+	NEWDUMP_OUTPUT=$(nvm flashregion_3_gbe.bin dump)
+	CHANGED_MAC=$(printf "%s\n" "$NEWDUMP_OUTPUT" | sed -n '2p')
+	whiptail_warning --title "Change ethernet MAC" --msgbox "Changed ethernet MAC address: $CHANGED_MAC" 0 80
+
+	# Decision: flash the new MAC address?
+	if whiptail_warning --title "Change ethernet MAC" --yesno "Do you really want to change the ethernet MAC address?" 0 80 --no-button "Do not change" --yes-button "Change"; then
+		# Insert modified GBE into backup.rom
+		if ! ifdtool -i gbe:flashregion_3_gbe.bin backup.rom; then
+			whiptail_error --title "Error" --msgbox "Failed to insert modified GBE!" 0 80
+			recovery
+		fi
+
+		# Flash back modified GBE only
+		if flashprog -p internal --ifd -i gbe -w backup.rom.new; then
+			whiptail_type $BG_COLOR_MAIN_MENU --title "Change ethernet MAC" --msgbox "Flashing completed successfully!" 0 80
+		else
+			whiptail_error --title "Error" --msgbox "Flashing FAILED!" 0 80
+			recovery
+		fi
+	else
+		whiptail_warning --title "Canceled" --msgbox "Ethernet MAC address change canceled." 0 80
+		clean_up_mac
+	fi
+
+	clean_up_mac
 }
 
 # gui-init start
