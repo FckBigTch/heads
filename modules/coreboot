@@ -167,6 +167,12 @@ coreboot-dasharo_nv4x_repo := https://github.com/dasharo/coreboot
 coreboot-dasharo_nv4x_commit_hash := 281a7fec1a1e7aed781b12a096c2fc0f87dc51b5
 $(eval $(call coreboot_module,dasharo_nv4x,))
 
+# MSI B850 boards
+#  Tag: msi_ms7e56_v0.9.1-rc1 (SHA: dc82f42)
+coreboot-dasharo_msi_b850_repo := https://github.com/dasharo/coreboot
+coreboot-dasharo_msi_b850_commit_hash := dc82f42acc3c8b3e2846a7843ca216bf192a9043
+$(eval $(call coreboot_module,dasharo_msi_b850))
+
 # MSI Z790 boards -- consumes nv4x toolchain
 #  Tag: msi_ms7e06_v0.9.4 (SHA: a5a05f13)
 coreboot-dasharo_msi_z790_repo := https://github.com/dasharo/coreboot
@@ -281,10 +287,13 @@ $(coreboot_module)_configure := \
 
 # Create a dependency from coreboot to the toolchain.  Use .heads-toolchain to
 # mark that the toolchain was built.
+# AMD board msi_b850p needs a different compiler, crossgcc-x64, for "x86_64 architecture"
 COREBOOT_TOOLCHAIN_DIR=$(build)/$($(coreboot_toolchain_module)_base_dir)
 $(COREBOOT_TOOLCHAIN_DIR)/.heads-toolchain: $(COREBOOT_TOOLCHAIN_DIR)/.canary
 	$(MAKE) -C "$(build)/$($(coreboot_toolchain_module)_base_dir)" CPUS=$(CPUS) "crossgcc-$(COREBOOT_TARGET)" \
 		$($(coreboot_toolchain_module)_toolchain_build_args)
+	 $(if $(CONFIG_COREBOOT_TOOLCHAIN_X64),$(MAKE) -C "$(build)/$($(coreboot_toolchain_module)_base_dir)" CPUS=$(CPUS) "crossgcc-x64" \
+                $($(coreboot_toolchain_module)_toolchain_build_args))
 	touch "$@"
 
 $(build)/$(coreboot_dir)/.configured: $(COREBOOT_TOOLCHAIN_DIR)/.heads-toolchain
