@@ -58,7 +58,9 @@
         innoextract # ROM extraction for dGPU
         libtool
         m4
+	meson # for AMD openSIL boards, required to build src/vendorcode/amd/opensil/ 
         ncurses5 # make menuconfig and slang
+	ninja # meson compile invokes ninja as the default backend, needed for AMD openSIL
         nss
         openssl # needed for talos-2 kernel build
         parted
