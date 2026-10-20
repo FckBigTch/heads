@@ -1,0 +1,15 @@
+!.gitignore
+!README.md
+!download_blobs.sh
+
+*.cfg
+*.sbin
+*.stkn
+*.csbin
+*.json
+*.bin
+*.efi
+*.json
+*.tkn
+*.key
+*.zip
